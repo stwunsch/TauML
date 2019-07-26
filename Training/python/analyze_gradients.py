@@ -183,6 +183,7 @@ plt.plot(x, grad_tauin_mu, "o-", alpha=0.7, label="mu")
 plt.plot(x, grad_tauin_tau, "o-", alpha=0.7, label="tau")
 plt.plot(x, grad_tauin_jet, "o-", alpha=0.7, label="jet")
 plt.xlabel("Nodes of the tau input layer")
+plt.ylabel("Mean abs. of the gradient")
 plt.legend()
 
 plt.tight_layout()
