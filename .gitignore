@@ -11,3 +11,5 @@ __init__.py
 .ipynb_checkpoints
 .DS_Store
 *.svg
+*.png
+*.swp
