@@ -32,19 +32,26 @@ class Predictor:
         if len(net_config.tau_branches):
             self.x_graphs.append(graph.get_tensor_by_name(gr_name_prefix + "tau:0"))
         for loc in net_config.cell_locations:
+            print("CHECK: cell_locations (inner, outer): " + loc)
             for comp_name in net_config.comp_names:
+                print("CHECK: comp_name (e, mu, jet): " + comp_name)
                 gr_name = '{}{}_{}:0'.format(gr_name_prefix, loc, comp_name)
                 self.x_graphs.append(graph.get_tensor_by_name(gr_name))
         self.y_graph = graph.get_tensor_by_name("deepTau/main_output/Softmax:0")
         self.concat_graph = graph.get_tensor_by_name("deepTau/features_concat/concat:0")
-        self.grad_e = tf.gradients(self.y_graph[:, e], self.concat_graph)[0]
-        self.grad_mu = tf.gradients(self.y_graph[:, mu], self.concat_graph)[0]
-        self.grad_tau = tf.gradients(self.y_graph[:, tau], self.concat_graph)[0]
-        self.grad_jet = tf.gradients(self.y_graph[:, jet], self.concat_graph)[0]
-        self.grad_tauin_e = tf.gradients(self.y_graph[:, e], self.x_graphs[0])[0]
-        self.grad_tauin_mu = tf.gradients(self.y_graph[:, mu], self.x_graphs[0])[0]
-        self.grad_tauin_tau = tf.gradients(self.y_graph[:, tau], self.x_graphs[0])[0]
-        self.grad_tauin_jet = tf.gradients(self.y_graph[:, jet], self.x_graphs[0])[0]
+        self.x_grads = []
+        self.concat_grads = []
+        # Input (tau + 3x inner + 3x outer)
+        if len(self.x_graphs) != 7:
+            raise Exception
+        for i in [e, mu, tau, jet]:
+            print("CHECK: index (0, 1, 2, 3): " + str(i))
+            # Concat layer
+            self.concat_grads.append(tf.gradients(self.y_graph[:, i], self.concat_graph)[0])
+        for j in range(len(self.x_graphs)):
+            for i in [e, mu, tau, jet]:
+                # Inner, outer
+                self.x_grads.append(tf.gradients(self.y_graph[:, i], self.x_graphs[j])[0])
 
     def Predict(self, session, X):
         if len(self.x_graphs) != len(X):
@@ -53,7 +60,12 @@ class Predictor:
         feed_dict = {}
         for n in range(len(self.x_graphs)):
             feed_dict[self.x_graphs[n]] = X[n]
-        pred, grad_e, grad_mu, grad_tau, grad_jet, grad_tauin_e, grad_tauin_mu, grad_tauin_tau, grad_tauin_jet = session.run([self.y_graph, self.grad_e, self.grad_mu, self.grad_tau, self.grad_jet, self.grad_tauin_e, self.grad_tauin_mu, self.grad_tauin_tau, self.grad_tauin_jet], feed_dict=feed_dict)
+        r = session.run([self.y_graph] + self.x_grads + self.concat_grads, feed_dict=feed_dict)
+        pred = r[0]
+        x_grads = r[1:1+len(self.x_grads)]
+        concat_grads = r[1+len(self.x_grads):]
+        x_grads = [np.sum(np.abs(x), axis=0) for x in x_grads]
+        concat_grads = [np.sum(np.abs(x), axis=0) for x in concat_grads]
         if np.any(np.isnan(pred)):
             raise RuntimeError("NaN in predictions. Total count = {} out of {}".format(
                                np.count_nonzero(np.isnan(pred)), pred.shape))
@@ -64,7 +76,7 @@ class Predictor:
         return pandas.DataFrame(data = {
             'deepId_e': pred[:, e], 'deepId_mu': pred[:, mu], 'deepId_tau': pred[:, tau],
             'deepId_jet': pred[:, jet]
-        }), np.sum(np.abs(grad_e), axis=0), np.sum(np.abs(grad_mu), axis=0), np.sum(np.abs(grad_tau), axis=0), np.sum(np.abs(grad_jet), axis=0), np.sum(np.abs(grad_tauin_e), axis=0), np.sum(np.abs(grad_tauin_mu), axis=0), np.sum(np.abs(grad_tauin_tau), axis=0), np.sum(np.abs(grad_tauin_jet), axis=0)
+        }), x_grads, concat_grads
 
 if args.filelist is None:
     if os.path.isdir(args.input):
@@ -90,14 +102,8 @@ predictor = Predictor(graph, net_conf)
 
 file_index = 0
 num_inputs = 0
-grad_e = np.zeros(185, dtype=np.float32)
-grad_mu = np.zeros(185, dtype=np.float32)
-grad_tau = np.zeros(185, dtype=np.float32)
-grad_jet = np.zeros(185, dtype=np.float32)
-grad_tauin_e = np.zeros(47, dtype=np.float32)
-grad_tauin_mu = np.zeros(47, dtype=np.float32)
-grad_tauin_tau = np.zeros(47, dtype=np.float32)
-grad_tauin_jet = np.zeros(47, dtype=np.float32)
+x_grads = None
+concat_grads = None
 for file_name in file_list:
     if args.max_n_files is not None and file_index >= args.max_n_files: break
     full_name = prefix + file_name
@@ -117,15 +123,17 @@ for file_name in file_list:
 
     with tqdm(total=loader.data_size, unit='taus') as pbar:
         for inputs in loader.generator(return_truth = False, return_weights = False):
-            df, grad_e_, grad_mu_, grad_tau_, grad_jet_, grad_tauin_e_, grad_tauin_mu_, grad_tauin_tau_, grad_tauin_jet_ = predictor.Predict(sess, inputs)
-            grad_e += grad_e_
-            grad_mu += grad_mu_
-            grad_tau += grad_tau_
-            grad_jet += grad_jet_
-            grad_tauin_e += grad_tauin_e_
-            grad_tauin_mu += grad_tauin_mu_
-            grad_tauin_tau += grad_tauin_tau_
-            grad_tauin_jet += grad_tauin_jet_
+            df, x_grads_, concat_grads_ = predictor.Predict(sess, inputs)
+            if x_grads == None:
+                x_grads = x_grads_
+            else:
+                for i in range(len(x_grads)):
+                    x_grads[i] += x_grads_[i]
+            if concat_grads == None:
+                concat_grads = concat_grads_
+            else:
+                for i in range(len(concat_grads)):
+                    concat_grads[i] += concat_grads_[i]
             num_inputs += df.shape[0]
             read_hdf_lock.acquire()
             df.to_hdf(pred_output, args.tree, append=True, complevel=1, complib='zlib')
@@ -133,29 +141,56 @@ for file_name in file_list:
             pbar.update(df.shape[0])
             gc.collect()
             del df
-            if num_inputs > 10000:
+            if num_inputs > 1000:
                 break
     file_index += 1
 
-grad_e /= float(num_inputs)
-grad_mu /= float(num_inputs)
-grad_tau /= float(num_inputs)
-grad_jet /= float(num_inputs)
-grad_tauin_e /= float(num_inputs)
-grad_tauin_mu /= float(num_inputs)
-grad_tauin_tau /= float(num_inputs)
-grad_tauin_jet /= float(num_inputs)
-"""
-grad_e /= np.sum(grad_e)
-grad_mu /= np.sum(grad_mu)
-grad_tau /= np.sum(grad_tau)
-grad_jet /= np.sum(grad_jet)
-"""
+for i in range(len(x_grads)):
+    x_grads[i] /= float(num_inputs)
+for i in range(len(concat_grads)):
+    concat_grads[i] /= float(num_inputs)
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+tau_grads = x_grads[0:4]
+inner_grads = x_grads[1*4:4*4]
+outer_grads = x_grads[4*4:]
+objs = ["e", "mu", "tau", "jet"]
+
+
+def plot_tau(x):
+    plt.figure(figsize=(int(len(x[0]) * 0.5), 6))
+    for i, obj in enumerate(objs):
+        plt.plot(range(len(x[i])), x[i], "o-", alpha=0.7, label=obj)
+    plt.xlabel("Nodes of the tau input layer")
+    plt.ylabel("Mean abs. of the gradient")
+    plt.legend()
+    plt.xlim((-1, len(x[0])))
+    plt.gca().set_xticks(range(len(x[0])))
+    plt.gca().set_xticklabels(input_event_branches + input_tau_branches, rotation=90)
+    plt.tight_layout()
+    plt.savefig("grad_tau_" + os.path.basename(file_name).replace(".h5", "") + ".png")
+
+plot_tau(tau_grads)
+
+def plot_cells(x, label):
+    plt.figure(figsize=(12, 12))
+    for i, obj in enumerate(objs):
+        plt.subplot(221 + i)
+        q = plt.pcolormesh(np.mean(x[i], axis=-1), cmap='Wistia')
+        cbar = plt.colorbar(q)
+        plt.xlabel(obj)
+        plt.ylabel("Mean abs. of the gradient averaged per cell")
+    plt.tight_layout()
+    plt.savefig("grad_cells_" + label + "_" + os.path.basename(file_name).replace(".h5", "") + ".png")
+
+plot_cells(inner_grads, "inner")
+plot_cells(outer_grads, "outer")
+
+
+"""
 plt.figure(figsize=(6, 6))
 
 plt.subplot(211)
@@ -168,11 +203,6 @@ plt.axvline(x=57, lw=1, color="k")
 plt.axvline(x=57+64, lw=1, color="k")
 plt.xlabel("Nodes of the concat. layer")
 plt.ylabel("Mean abs. of the gradient")
-"""
-plt.text(25, 0.002, "tau")
-plt.text(85, 0.002, "inner")
-plt.text(150, 0.002, "outer")
-"""
 plt.xlim((0, 184))
 plt.legend()
 
@@ -188,5 +218,6 @@ plt.legend()
 
 plt.tight_layout()
 plt.savefig("grad_" + os.path.basename(file_name).replace(".h5", "") + ".png")
+"""
 
 print("All files processed.")
