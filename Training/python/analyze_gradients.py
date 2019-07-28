@@ -204,7 +204,21 @@ def plot_concat(x):
     plt.tight_layout()
     plt.savefig("grad_concat_" + os.path.basename(file_name).replace(".h5", "") + ".png")
 
+def plot_concat_sum(x):
+    plt.figure(figsize=(4, 4))
+    for i, obj in enumerate(objs):
+        plt.plot(range(3), [np.sum(x[i][:57]), np.sum(x[i][57:57+64]), np.sum(x[i][57+64:])], "o-", alpha=0.7, label=obj)
+    plt.xlabel("Summed nodes of the concat layer")
+    plt.ylabel("Mean abs. of the gradient")
+    plt.legend()
+    plt.xlim((-1, 3))
+    plt.gca().set_xticks([0, 1, 2])
+    plt.gca().set_xticklabels(["tau variables", "inner cells", "outer cells"], rotation=90)
+    plt.tight_layout()
+    plt.savefig("grad_concat_sum_" + os.path.basename(file_name).replace(".h5", "") + ".png")
+
 plot_concat(concat_grads)
+plot_concat_sum(concat_grads)
 
 """
 plt.figure(figsize=(6, 6))
