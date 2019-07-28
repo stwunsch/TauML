@@ -141,7 +141,7 @@ for file_name in file_list:
             pbar.update(df.shape[0])
             gc.collect()
             del df
-            if num_inputs > 1000:
+            if num_inputs > 10000:
                 break
     file_index += 1
 
@@ -189,6 +189,22 @@ def plot_cells(x, label):
 plot_cells(inner_grads, "inner")
 plot_cells(outer_grads, "outer")
 
+def plot_concat(x):
+    plt.figure(figsize=(12, 4))
+    for i, obj in enumerate(objs):
+        plt.plot(range(len(x[i])), x[i], "o-", alpha=0.7, label=obj)
+    plt.axvline(x=57, lw=1, color="k")
+    plt.axvline(x=57+64, lw=1, color="k")
+    plt.xlabel("Nodes of the concat layer")
+    plt.ylabel("Mean abs. of the gradient")
+    plt.legend()
+    plt.xlim((-1, len(x[0])))
+    plt.gca().set_xticks([25, 85, 150])
+    plt.gca().set_xticklabels(["tau variables", "inner cells", "outer cells"])
+    plt.tight_layout()
+    plt.savefig("grad_concat_" + os.path.basename(file_name).replace(".h5", "") + ".png")
+
+plot_concat(concat_grads)
 
 """
 plt.figure(figsize=(6, 6))
